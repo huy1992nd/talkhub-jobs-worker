@@ -18,7 +18,7 @@ export async function publishToFacebookPage(env: Env, jwt: string, draftId: stri
   const row = draft as ContentDraftRow & { jobs: { project_id: string; config: { channels?: { facebookPage?: { pageId?: string } } } } };
   await assertCanEditProject(env, jwt, row.project_id);
 
-  if (row.status !== 'approved') {
+  if (row.status !== 'approved' && row.status !== 'publish_failed') {
     throw new Error('Draft must be approved before publish');
   }
 
