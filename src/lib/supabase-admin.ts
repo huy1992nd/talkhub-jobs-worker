@@ -19,20 +19,32 @@ export async function assertCanEditProject(env: Env, jwt: string, projectId: str
   const { data: userData, error: userError } = await client.auth.getUser();
   if (userError || !userData.user) throw new Error('Unauthorized');
 
+  // RPC uses auth.uid() — must call with the user's JWT, not service_role.
+  const { data: canEdit, error: rpcError } = await client.rpc('can_edit_project', {
+    p_project_id: projectId,
+  });
+  if (!rpcError && canEdit) return userData.user;
+
   const admin = createAdminClient(env);
-  const { data, error } = await admin.rpc('can_edit_project', { p_project_id: projectId });
-  if (error) {
-    const { data: member } = await admin
-      .from('project_members')
-      .select('role')
-      .eq('project_id', projectId)
-      .eq('user_id', userData.user.id)
-      .maybeSingle();
-    if (!member || (member.role !== 'owner' && member.role !== 'editor')) {
-      throw new Error('Forbidden');
-    }
+  const { data: member } = await admin
+    .from('project_members')
+    .select('role')
+    .eq('project_id', projectId)
+    .eq('user_id', userData.user.id)
+    .maybeSingle();
+
+  if (member?.role === 'owner' || member?.role === 'editor') {
     return userData.user;
   }
-  if (!data) throw new Error('Forbidden');
-  return userData.user;
+
+  const { data: project } = await admin
+    .from('projects')
+    .select('owner_id')
+    .eq('id', projectId)
+    .maybeSingle();
+  if (project?.owner_id === userData.user.id) {
+    return userData.user;
+  }
+
+  throw new Error('Forbidden');
 }
