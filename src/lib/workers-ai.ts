@@ -17,21 +17,34 @@ export async function generateText(env: Env, model: string, system: string, user
   throw new Error('Unexpected Workers AI text response');
 }
 
-export async function generateImageBytes(env: Env, model: string, prompt: string): Promise<ArrayBuffer> {
-  const response = (await env.AI.run(model, { prompt })) as ArrayBuffer | Blob | { image?: string };
+async function toArrayBuffer(data: unknown): Promise<ArrayBuffer | null> {
+  if (data instanceof ArrayBuffer) return data;
+  if (data instanceof Uint8Array) {
+    return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer;
+  }
+  if (data instanceof Blob) return data.arrayBuffer();
+  if (data instanceof ReadableStream) return new Response(data).arrayBuffer();
+  if (data instanceof Response) return data.arrayBuffer();
 
-  if (response instanceof ArrayBuffer) return response;
-  if (response instanceof Blob) return response.arrayBuffer();
-
-  const b64 = (response as { image?: string }).image;
-  if (b64) {
-    const binary = atob(b64);
+  const obj = data as Record<string, unknown> | null;
+  if (obj && typeof obj.image === 'string') {
+    const binary = atob(obj.image);
     const bytes = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
     return bytes.buffer;
   }
 
-  throw new Error('Unexpected Workers AI image response');
+  return null;
+}
+
+export async function generateImageBytes(env: Env, model: string, prompt: string): Promise<ArrayBuffer> {
+  const response = await env.AI.run(model, { prompt });
+  const bytes = await toArrayBuffer(response);
+  if (bytes) return bytes;
+
+  const kind = response === null ? 'null' : typeof response;
+  const ctor = (response as object)?.constructor?.name ?? 'unknown';
+  throw new Error(`Unexpected Workers AI image response (${kind}, ${ctor})`);
 }
 
 export function parseArticleJson(raw: string): { title: string; body: string; metaDescription: string } {
