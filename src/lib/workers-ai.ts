@@ -47,19 +47,84 @@ export async function generateImageBytes(env: Env, model: string, prompt: string
   throw new Error(`Unexpected Workers AI image response (${kind}, ${ctor})`);
 }
 
-export function parseArticleJson(raw: string): { title: string; body: string; metaDescription: string } {
-  const trimmed = raw.trim();
-  const jsonMatch = trimmed.match(/\{[\s\S]*\}/);
-  const jsonText = jsonMatch?.[0] ?? trimmed;
-  const parsed = JSON.parse(jsonText) as {
-    title?: string;
-    body?: string;
-    metaDescription?: string;
-    meta_description?: string;
-  };
+function stripMarkdownFence(text: string): string {
+  return text
+    .trim()
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/, '')
+    .trim();
+}
+
+/** Read a JSON string value even when the model omitted \\n escapes (common LLM mistake). */
+function extractQuotedField(json: string, field: string): string | null {
+  const re = new RegExp(`"${field}"\\s*:\\s*"`, 'i');
+  const match = re.exec(json);
+  if (!match) return null;
+
+  let i = match.index + match[0].length;
+  let out = '';
+  while (i < json.length) {
+    const ch = json[i]!;
+    if (ch === '\\' && i + 1 < json.length) {
+      const next = json[i + 1]!;
+      if (next === 'n') out += '\n';
+      else if (next === 'r') out += '\r';
+      else if (next === 't') out += '\t';
+      else if (next === '"') out += '"';
+      else if (next === '\\') out += '\\';
+      else out += next;
+      i += 2;
+      continue;
+    }
+    if (ch === '"') break;
+    out += ch;
+    i += 1;
+  }
+  return out;
+}
+
+function normalizeArticle(parsed: {
+  title?: string;
+  body?: string;
+  metaDescription?: string;
+  meta_description?: string;
+}): { title: string; body: string; metaDescription: string } {
   return {
     title: parsed.title?.trim() || 'Untitled',
-    body: parsed.body?.trim() || trimmed,
+    body: parsed.body?.trim() || '',
     metaDescription: (parsed.metaDescription ?? parsed.meta_description ?? '').trim(),
+  };
+}
+
+export function parseArticleJson(raw: string): { title: string; body: string; metaDescription: string } {
+  const trimmed = stripMarkdownFence(raw);
+  const jsonMatch = trimmed.match(/\{[\s\S]*\}/);
+  const jsonText = jsonMatch?.[0] ?? trimmed;
+
+  try {
+    const parsed = JSON.parse(jsonText) as Parameters<typeof normalizeArticle>[0];
+    const article = normalizeArticle(parsed);
+    if (article.body) return article;
+  } catch {
+    // fall through — LLM often puts raw newlines inside "body"
+  }
+
+  const title = extractQuotedField(jsonText, 'title');
+  const body = extractQuotedField(jsonText, 'body');
+  const metaDescription =
+    extractQuotedField(jsonText, 'metaDescription') ?? extractQuotedField(jsonText, 'meta_description');
+
+  if (title || body) {
+    return {
+      title: title?.trim() || 'Untitled',
+      body: body?.trim() || trimmed,
+      metaDescription: metaDescription?.trim() || '',
+    };
+  }
+
+  return {
+    title: 'Untitled',
+    body: trimmed,
+    metaDescription: '',
   };
 }
